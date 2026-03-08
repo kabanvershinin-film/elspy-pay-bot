@@ -5,14 +5,14 @@ from telegram import Update, LabeledPrice, InlineKeyboardButton, InlineKeyboardM
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     PreCheckoutQueryHandler, CallbackQueryHandler,
-    filters, ContextTypes
+    filters, ContextTypes, ConversationHandler
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))  # Твой Telegram ID
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 
 PLANS = {
     "basic":  {"name": "Basic",  "rub": 1000,  "stars": 500,  "desc": "~600 фото, ~30 видео, все модели",               "emoji": "🔵"},
@@ -21,8 +21,8 @@ PLANS = {
     "max":    {"name": "Max",    "rub": 12000, "stars": 6000, "desc": "~6500 фото, ~1500 видео, приоритет моделей",       "emoji": "🟡"},
 }
 
-# Хранилище ключей: {"basic": ["KEY1", "KEY2"], "pro": [...], ...}
 KEYS_FILE = "/tmp/keys.json"
+WAITING_KEY = 1
 
 def load_keys():
     try:
@@ -35,6 +35,9 @@ def save_keys(keys):
     with open(KEYS_FILE, "w") as f:
         json.dump(keys, f)
 
+def is_admin(user_id):
+    return user_id == ADMIN_ID
+
 def plans_keyboard():
     rows = []
     for pid, p in PLANS.items():
@@ -44,108 +47,131 @@ def plans_keyboard():
         )])
     return InlineKeyboardMarkup(rows)
 
-def is_admin(user_id):
-    return user_id == ADMIN_ID
+def admin_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔑 Добавить ключи", callback_data="admin_addkeys")],
+        [InlineKeyboardButton("📊 Остаток ключей", callback_data="admin_keys")],
+        [InlineKeyboardButton("🗑 Очистить ключи", callback_data="admin_delkeys")],
+    ])
 
-# ─── ADMIN COMMANDS ───────────────────────────────────────
-
-async def addkey(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Добавить ключ: /addkey basic КЛЮЧ"""
-    if not is_admin(update.message.from_user.id):
-        await update.message.reply_text("❌ Нет доступа")
-        return
-
-    if len(context.args) < 2:
-        await update.message.reply_text(
-            "📋 Использование:\n`/addkey basic КЛЮЧ`\n`/addkey pro КЛЮЧ`\n`/addkey elite КЛЮЧ`\n`/addkey max КЛЮЧ`",
-            parse_mode="Markdown"
-        )
-        return
-
-    pid = context.args[0].lower()
-    key = context.args[1].strip()
-
-    if pid not in PLANS:
-        await update.message.reply_text("❌ Неверный тариф. Используй: basic, pro, elite, max")
-        return
-
-    keys = load_keys()
-    keys[pid].append(key)
-    save_keys(keys)
-
-    await update.message.reply_text(
-        f"✅ Ключ добавлен!\n\nТариф: *{PLANS[pid]['name']}*\nКлюч: `{key}`\nВсего ключей: {len(keys[pid])}",
-        parse_mode="Markdown"
-    )
-
-async def keys_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать сколько ключей осталось: /keys"""
-    if not is_admin(update.message.from_user.id):
-        await update.message.reply_text("❌ Нет доступа")
-        return
-
-    keys = load_keys()
-    text = "🔑 *Остаток ключей:*\n\n"
+def addkeys_keyboard():
+    rows = []
     for pid, p in PLANS.items():
-        count = len(keys.get(pid, []))
-        emoji = "✅" if count > 0 else "❌"
-        text += f"{emoji} *{p['name']}*: {count} шт\n"
-    await update.message.reply_text(text, parse_mode="Markdown")
+        rows.append([InlineKeyboardButton(
+            f"{p['emoji']} {p['name']}",
+            callback_data=f"addkey_{pid}"
+        )])
+    rows.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_back")])
+    return InlineKeyboardMarkup(rows)
 
-async def delkeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Очистить все ключи тарифа: /delkeys basic"""
-    if not is_admin(update.message.from_user.id):
-        await update.message.reply_text("❌ Нет доступа")
-        return
-
-    if not context.args:
-        await update.message.reply_text("Использование: `/delkeys basic`", parse_mode="Markdown")
-        return
-
-    pid = context.args[0].lower()
-    if pid not in PLANS:
-        await update.message.reply_text("❌ Неверный тариф")
-        return
-
-    keys = load_keys()
-    keys[pid] = []
-    save_keys(keys)
-    await update.message.reply_text(f"✅ Ключи тарифа *{PLANS[pid]['name']}* очищены", parse_mode="Markdown")
+def delkeys_keyboard():
+    rows = []
+    for pid, p in PLANS.items():
+        rows.append([InlineKeyboardButton(
+            f"🗑 {p['name']}",
+            callback_data=f"delkey_{pid}"
+        )])
+    rows.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_back")])
+    return InlineKeyboardMarkup(rows)
 
 # ─── USER COMMANDS ────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👁 *ElSpy Pay* — пополнение баланса ElSpy AI\n\n"
-        "Выбери тариф и оплати через Telegram Stars.\n"
-        "После оплаты получишь ключ активации для сайта.\n\n"
-        "💡 Баланс не сгорает!",
-        parse_mode="Markdown",
-        reply_markup=plans_keyboard()
-    )
-
-async def show_plans(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💳 *Выбери тариф:*", parse_mode="Markdown", reply_markup=plans_keyboard())
+    if is_admin(update.message.from_user.id):
+        await update.message.reply_text(
+            "👁 *ElSpy Pay* — Панель управления\n\nВыбери действие:",
+            parse_mode="Markdown",
+            reply_markup=admin_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            "👁 *ElSpy Pay* — пополнение баланса ElSpy AI\n\n"
+            "Выбери тариф и оплати через Telegram Stars.\n"
+            "После оплаты получишь ключ активации для сайта.\n\n"
+            "💡 Баланс не сгорает!",
+            parse_mode="Markdown",
+            reply_markup=plans_keyboard()
+        )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    uid = query.from_user.id
 
-    if query.data.startswith("buy_"):
+    # ── ADMIN ──
+    if query.data == "admin_addkeys" and is_admin(uid):
+        await query.message.edit_text(
+            "➕ *Добавить ключи*\n\nВыбери тариф:",
+            parse_mode="Markdown",
+            reply_markup=addkeys_keyboard()
+        )
+
+    elif query.data == "admin_keys" and is_admin(uid):
+        keys = load_keys()
+        text = "📊 *Остаток ключей:*\n\n"
+        for pid, p in PLANS.items():
+            count = len(keys.get(pid, []))
+            emoji = "✅" if count > 0 else "❌"
+            text += f"{emoji} *{p['name']}*: {count} шт\n"
+        await query.message.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ Назад", callback_data="admin_back")
+        ]]))
+
+    elif query.data == "admin_delkeys" and is_admin(uid):
+        await query.message.edit_text(
+            "🗑 *Очистить ключи*\n\nВыбери тариф:",
+            parse_mode="Markdown",
+            reply_markup=delkeys_keyboard()
+        )
+
+    elif query.data == "admin_back" and is_admin(uid):
+        await query.message.edit_text(
+            "👁 *ElSpy Pay* — Панель управления\n\nВыбери действие:",
+            parse_mode="Markdown",
+            reply_markup=admin_keyboard()
+        )
+
+    elif query.data.startswith("addkey_") and is_admin(uid):
+        pid = query.data[7:]
+        context.user_data["adding_key_plan"] = pid
+        p = PLANS[pid]
+        await query.message.edit_text(
+            f"➕ *Добавить ключ — {p['name']}*\n\n"
+            f"Отправь ключ следующим сообщением.\n"
+            f"Можно отправить несколько ключей — каждый с новой строки:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="admin_back")
+            ]])
+        )
+
+    elif query.data.startswith("delkey_") and is_admin(uid):
+        pid = query.data[7:]
+        keys = load_keys()
+        keys[pid] = []
+        save_keys(keys)
+        p = PLANS[pid]
+        await query.message.edit_text(
+            f"✅ Ключи тарифа *{p['name']}* очищены",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data="admin_back")
+            ]])
+        )
+
+    # ── USER ──
+    elif query.data.startswith("buy_"):
         pid = query.data[4:]
         p = PLANS.get(pid)
         if not p:
             return
-
-        # Проверяем наличие ключей
         keys = load_keys()
         if not keys.get(pid):
             await query.message.reply_text(
-                f"😔 Ключи для тарифа *{p['name']}* временно недоступны.\nПопробуй позже или выбери другой тариф.",
+                f"😔 Ключи для тарифа *{p['name']}* временно недоступны.\nПопробуй позже.",
                 parse_mode="Markdown"
             )
             return
-
         await query.message.reply_text(
             f"{p['emoji']} *{p['name']}*\n\n"
             f"💰 Стоимость: *{p['rub']}₽* ({p['stars']} ⭐)\n"
@@ -172,6 +198,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             provider_token=""
         )
 
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.message.from_user.id
+
+    # Если админ добавляет ключи
+    if is_admin(uid) and "adding_key_plan" in context.user_data:
+        pid = context.user_data.pop("adding_key_plan")
+        p = PLANS[pid]
+        new_keys = [k.strip() for k in update.message.text.strip().splitlines() if k.strip()]
+        keys = load_keys()
+        keys[pid].extend(new_keys)
+        save_keys(keys)
+        await update.message.reply_text(
+            f"✅ Добавлено *{len(new_keys)}* ключей для *{p['name']}*\n"
+            f"Всего теперь: *{len(keys[pid])}* шт",
+            parse_mode="Markdown",
+            reply_markup=admin_keyboard()
+        )
+        return
+
+    await update.message.reply_text("Выбери тариф:", reply_markup=plans_keyboard())
+
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
 
@@ -185,32 +232,30 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Ошибка. Напиши в поддержку.")
         return
 
-    # Берём ключ из списка
     keys = load_keys()
     if not keys.get(pid):
-        await update.message.reply_text(
-            "❌ Ключи закончились! Напиши в поддержку — вернём деньги или пришлём ключ вручную."
-        )
-        # Уведомляем админа
+        await update.message.reply_text("❌ Ключи закончились! Напиши в поддержку.")
         if ADMIN_ID:
             await context.bot.send_message(
                 ADMIN_ID,
-                f"⚠️ Ключи закончились!\nТариф: {p['name']}\nПользователь: {user_id}\nОплатил: {p['stars']} ⭐"
+                f"⚠️ *Ключи закончились!*\nТариф: {p['name']}\nПользователь: {user_id}",
+                parse_mode="Markdown"
             )
         return
 
-    key = keys[pid].pop(0)  # Берём первый ключ
+    key = keys[pid].pop(0)
     save_keys(keys)
-
     logger.info(f"Payment: user={user_id}, plan={pid}, key={key}")
 
-    # Уведомляем админа если ключей мало
     remaining = len(keys[pid])
     if ADMIN_ID and remaining <= 2:
         await context.bot.send_message(
             ADMIN_ID,
-            f"⚠️ Мало ключей!\nТариф: *{p['name']}*\nОсталось: {remaining} шт\nДобавь: `/addkey {pid} КЛЮЧ`",
-            parse_mode="Markdown"
+            f"⚠️ *Мало ключей!*\nТариф: *{p['name']}*\nОсталось: {remaining} шт",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"➕ Добавить ключи", callback_data="admin_addkeys")
+            ]])
         )
 
     await update.message.reply_text(
@@ -231,23 +276,15 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❓ *Помощь*\n\n"
         "/start — главное меню\n"
-        "/plans — выбрать тариф\n"
         "/help — помощь\n\n"
         "Поддержка: @elspy\\_support",
         parse_mode="Markdown"
     )
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Выбери тариф:", reply_markup=plans_keyboard())
-
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("plans", show_plans))
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("addkey", addkey))
-    app.add_handler(CommandHandler("keys", keys_status))
-    app.add_handler(CommandHandler("delkeys", delkeys))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
