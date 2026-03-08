@@ -157,7 +157,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order_id = query.data[8:]
         pending = load_pending()
         if order_id not in pending:
-            await query.message.edit_text("❌ Заявка не найдена (уже обработана?)")
+            await query.message.edit_caption("❌ Заявка не найдена (уже обработана?)")
             return
         order = pending[order_id]
         pid = order["plan"]
@@ -166,7 +166,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keys = load_keys()
         if not keys.get(pid):
-            await query.message.edit_text("❌ Ключи закончились! Добавь ключи и подтверди вручную.")
+            await query.message.edit_caption("❌ Ключи закончились! Добавь ключи и подтверди вручную.")
             return
 
         key = keys[pid].pop(0)
@@ -174,7 +174,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del pending[order_id]
         save_pending(pending)
 
-        await query.message.edit_text(f"✅ Подтверждено! Ключ *{key}* отправлен пользователю {user_id}", parse_mode="Markdown")
+        await query.message.edit_caption(f"✅ Подтверждено! Ключ `{key}` отправлен пользователю {user_id}", parse_mode="Markdown")
 
         await context.bot.send_message(
             user_id,
@@ -194,14 +194,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order_id = query.data[7:]
         pending = load_pending()
         if order_id not in pending:
-            await query.message.edit_text("❌ Заявка не найдена")
+            await query.message.edit_caption("❌ Заявка не найдена")
             return
         order = pending[order_id]
         user_id = order["user_id"]
         del pending[order_id]
         save_pending(pending)
 
-        await query.message.edit_text(f"❌ Заявка отклонена. Уведомление отправлено пользователю {user_id}")
+        await query.message.edit_caption(f"❌ Заявка отклонена. Уведомление отправлено пользователю {user_id}")
         await context.bot.send_message(
             user_id,
             "❌ *Оплата не подтверждена.*\n\nВозможно скрин нечёткий или сумма не совпадает.\nНапиши в поддержку если есть вопросы.",
@@ -218,6 +218,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(
             f"{p['emoji']} *{p['name']}* — {p['rub']}₽\n\n"
             f"💳 *Оплата через СБП:*\n"
+            f"🏦 Банк: Сбербанк\n"
             f"📱 Номер: `{SBP_PHONE}`\n"
             f"👤 Получатель: {SBP_NAME}\n"
             f"💰 Сумма: *{p['rub']} ₽*\n\n"
