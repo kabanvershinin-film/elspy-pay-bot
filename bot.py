@@ -272,6 +272,28 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode="Markdown"
     )
 
+async def pin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправить закреплённое сообщение с кнопкой в группу"""
+    if not is_admin(update.message.from_user.id):
+        return
+    msg = await update.message.reply_text(
+        "👁 *ElSpy AI — Пополнение баланса*\n\n"
+        "Оплачивай через Telegram Stars и получай ключ активации.\n\n"
+        "🔵 Basic — 1000₽\n"
+        "🟢 Pro — 3000₽\n"
+        "🟣 Elite — 6000₽\n"
+        "🟡 Max — 12000₽\n\n"
+        "💡 Баланс не сгорает!",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("💳 Пополнить баланс", url="https://t.me/elspy_pay_bot?start=pay")
+        ]])
+    )
+    await context.bot.pin_chat_message(
+        chat_id=update.message.chat_id,
+        message_id=msg.message_id
+    )
+
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❓ *Помощь*\n\n"
@@ -285,6 +307,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("pin", pin_cmd))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
