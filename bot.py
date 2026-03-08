@@ -182,12 +182,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Тариф: *{p['name']}* ({p['rub']}₽)\n\n"
             f"🔑 *Ключ активации:*\n`{key}`\n\n"
             f"📋 *Как активировать:*\n"
-            f"1. Перейди на elspy.ai\n"
+            f"1. Перейди на сайт\n"
             f"2. Войди в аккаунт\n"
             f"3. Нажми «Пополнить баланс»\n"
             f"4. Введи ключ — баланс пополнится на *{p['rub']}₽*\n\n"
             f"⚠️ Ключ одноразовый!",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🌐 Перейти на сайт", url="https://elspy.ai6700.com/")
+            ]])
         )
 
     elif query.data.startswith("reject_") and is_admin(uid):
