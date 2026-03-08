@@ -296,7 +296,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def pin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.message.from_user.id):
+    user = update.message.from_user
+    if not user or not is_admin(user.id):
         return
     msg = await update.message.reply_text(
         "👁 *ElSpy AI — Пополнение баланса*\n\n"
