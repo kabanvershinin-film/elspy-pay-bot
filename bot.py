@@ -1,11 +1,12 @@
 import os
 import logging
 import json
-from telegram import Update, LabeledPrice, InlineKeyboardButton, InlineKeyboardMarkup
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    PreCheckoutQueryHandler, CallbackQueryHandler,
-    filters, ContextTypes
+    CallbackQueryHandler, filters, ContextTypes
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -13,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
-SBP_PHONE = os.environ.get("SBP_PHONE", "+7XXXXXXXXXX")  # Твой номер СБП
-SBP_NAME  = os.environ.get("SBP_NAME", "Евгений В.")     # Имя получателя
+SBP_PHONE = os.environ.get("SBP_PHONE", "+7XXXXXXXXXX")
+SBP_NAME  = os.environ.get("SBP_NAME", "Евгений В.")
 
 PLANS = {
     "basic":  {"name": "Basic",  "rub": 1000,  "stars": 500,  "desc": "~600 фото, ~30 видео, все модели",               "emoji": "🔵"},
@@ -25,6 +26,24 @@ PLANS = {
 
 KEYS_FILE = "/tmp/keys.json"
 PENDING_FILE = "/tmp/pending.json"
+
+# ─── KEEP-ALIVE ───────────────────────────────────────────
+
+class KeepAlive(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'OK')
+    def log_message(self, format, *args):
+        pass
+
+def run_keep_alive():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), KeepAlive)
+    logger.info(f"Keep-alive server on port {port}")
+    server.serve_forever()
+
+# ─── KEYS/PENDING ─────────────────────────────────────────
 
 def load_keys():
     try:
@@ -50,6 +69,8 @@ def save_pending(pending):
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
+
+# ─── KEYBOARDS ────────────────────────────────────────────
 
 def plans_keyboard():
     rows = []
@@ -108,7 +129,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     uid = query.from_user.id
 
-    # ── ADMIN ──
     if query.data == "admin_addkeys" and is_admin(uid):
         await query.message.edit_text("➕ *Добавить ключи*\n\nВыбери тариф:", parse_mode="Markdown", reply_markup=addkeys_keyboard())
 
@@ -152,7 +172,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_keys(keys)
         await query.message.edit_text(f"✅ Ключи тарифа *{PLANS[pid]['name']}* очищены", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]]))
 
-    # ── ADMIN CONFIRM/REJECT ──
     elif query.data.startswith("confirm_") and is_admin(uid):
         order_id = query.data[8:]
         pending = load_pending()
@@ -211,7 +230,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-    # ── USER ──
     elif query.data.startswith("buy_"):
         pid = query.data[4:]
         p = PLANS.get(pid)
@@ -256,7 +274,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-    # Уведомляем админа
     name = f"@{user.username}" if user.username else f"{user.first_name} ({uid})"
     await context.bot.send_photo(
         ADMIN_ID,
@@ -321,6 +338,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def main():
+    # Запускаем keep-alive сервер в отдельном потоке
+    threading.Thread(target=run_keep_alive, daemon=True).start()
+
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
