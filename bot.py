@@ -26,8 +26,10 @@ PLANS = {
     "ultra": {"name": "Ultra", "rub": 10000, "desc": "~6500 фото, ~1500 видео, максимум возможностей",  "emoji": "🔴"},
 }
 
-# Временное хранилище ожидающих оплат (в памяти)
+# Хранилище в памяти
 pending_orders = {}
+keys_count = {pid: 0 for pid in ["start", "basic", "pro", "elite", "max", "ultra"]}
+keys_messages = {pid: [] for pid in ["start", "basic", "pro", "elite", "max", "ultra"]}
 
 # ─── KEEP-ALIVE ───────────────────────────────────────────
 
@@ -49,44 +51,42 @@ def is_admin(user_id):
 # ─── TELEGRAM CHANNEL KEYS ────────────────────────────────
 
 async def add_key_to_channel(bot, plan_id: str, key: str) -> int:
-    """Добавляет ключ в канал, возвращает message_id"""
-    msg = await bot.send_message(
-        KEYS_CHANNEL,
-        f"{plan_id}:{key}"
-    )
+    """Добавляет ключ в канал и сохраняет message_id"""
+    msg = await bot.send_message(KEYS_CHANNEL, f"{plan_id}:{key}")
+    keys_messages[plan_id].append(msg.message_id)
+    keys_count[plan_id] = len(keys_messages[plan_id])
     return msg.message_id
 
 async def get_key_from_channel(bot, plan_id: str):
-    """Ищет первый ключ нужного тарифа в канале"""
+    """Берёт первый ключ из памяти"""
+    if not keys_messages[plan_id]:
+        return None, None
+    msg_id = keys_messages[plan_id][0]
     try:
-        # Получаем историю канала
-        messages = await bot.get_chat_history(KEYS_CHANNEL, limit=200)
-        for msg in messages:
-            if msg.text and msg.text.startswith(f"{plan_id}:"):
-                key = msg.text.split(":", 1)[1].strip()
-                return key, msg.message_id
+        # Читаем сообщение из канала
+        msg = await bot.forward_message(
+            chat_id=ADMIN_ID,
+            from_chat_id=KEYS_CHANNEL,
+            message_id=msg_id
+        )
+        # Извлекаем ключ из текста
+        if msg.text and ":" in msg.text:
+            key = msg.text.split(":", 1)[1].strip()
+            await bot.delete_message(ADMIN_ID, msg.message_id)
+            return key, msg_id
     except Exception as e:
         logger.error(f"get_key error: {e}")
     return None, None
 
-async def count_keys_in_channel(bot, plan_id: str) -> int:
-    """Считает ключи тарифа в канале"""
-    try:
-        count = 0
-        async for msg in bot.get_chat_history(KEYS_CHANNEL, limit=500):
-            if msg.text and msg.text.startswith(f"{plan_id}:"):
-                count += 1
-        return count
-    except Exception as e:
-        logger.error(f"count_keys error: {e}")
-        return 0
-
-async def delete_key_from_channel(bot, message_id: int):
-    """Удаляет ключ из канала"""
+async def delete_key_from_channel(bot, message_id: int, plan_id: str):
+    """Удаляет ключ из канала и памяти"""
     try:
         await bot.delete_message(KEYS_CHANNEL, message_id)
+        if message_id in keys_messages[plan_id]:
+            keys_messages[plan_id].remove(message_id)
+        keys_count[plan_id] = len(keys_messages[plan_id])
     except Exception as e:
-        logger.error(f"delete_key error: {e}")
+        log.error(f"delete_key error: {e}")
 
 # ─── KEYBOARDS ────────────────────────────────────────────
 
@@ -156,10 +156,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "admin_keys" and is_admin(uid):
-        await query.message.edit_text("⏳ Считаю ключи...", parse_mode="Markdown")
         text = "📊 *Остаток ключей:*\n\n"
         for pid, p in PLANS.items():
-            count = await count_keys_in_channel(bot, pid)
+            count = keys_count.get(pid, 0)
             emoji = "✅" if count > 0 else "❌"
             text += f"{emoji} *{p['name']}* ({p['rub']}₽): {count} шт\n"
         await query.message.edit_text(
@@ -209,15 +208,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("delkey_") and is_admin(uid):
         pid = query.data[7:]
         p = PLANS[pid]
-        await query.message.edit_text(f"⏳ Удаляю ключи *{p['name']}*...", parse_mode="Markdown")
         deleted = 0
-        try:
-            async for msg in bot.get_chat_history(KEYS_CHANNEL, limit=500):
-                if msg.text and msg.text.startswith(f"{pid}:"):
-                    await bot.delete_message(KEYS_CHANNEL, msg.message_id)
-                    deleted += 1
-        except Exception as e:
-            logger.error(f"delkey error: {e}")
+        for msg_id in keys_messages[pid][:]:
+            try:
+                await bot.delete_message(KEYS_CHANNEL, msg_id)
+                deleted += 1
+            except Exception as e:
+                logger.error(f"delkey error: {e}")
+        keys_messages[pid] = []
+        keys_count[pid] = 0
         await query.message.edit_text(
             f"✅ Удалено *{deleted}* ключей тарифа *{p['name']}*",
             parse_mode="Markdown",
@@ -241,7 +240,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Удаляем ключ из канала
-        await delete_key_from_channel(bot, msg_id)
+        await delete_key_from_channel(bot, msg_id, pid)
         del pending_orders[order_id]
 
         await query.message.edit_caption(
