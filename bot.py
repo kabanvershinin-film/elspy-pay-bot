@@ -287,6 +287,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p = PLANS.get(pid)
         if not p:
             return
+        # Проверяем наличие ключей
+        if keys_count.get(pid, 0) == 0:
+            await query.answer("❌ Этот тариф временно недоступен", show_alert=True)
+            await query.message.reply_text(
+                f"❌ *Тариф {p['name']} временно недоступен*\n\n"
+                f"Ключи закончились. Попробуйте другой тариф или напишите в поддержку.",
+                parse_mode="Markdown",
+                reply_markup=plans_keyboard()
+            )
+            return
         context.user_data["selected_plan"] = pid
         await query.message.reply_text(
             f"{p['emoji']} *{p['name']}* — {p['rub']}₽\n\n"
