@@ -41,9 +41,24 @@ class KeepAlive(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+import time
+import requests as req
+
 def run_keep_alive():
     port = int(os.environ.get("PORT", 8080))
     HTTPServer(('0.0.0.0', port), KeepAlive).serve_forever()
+
+def self_ping():
+    """Пингует сам себя каждые 10 минут чтобы не засыпать"""
+    render_url = os.environ.get("RENDER_URL", "")
+    while True:
+        time.sleep(600)
+        if render_url:
+            try:
+                req.get(render_url, timeout=10)
+                logger.info("keep-alive ping OK")
+            except Exception as e:
+                logger.warning(f"keep-alive error: {e}")
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -381,6 +396,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     threading.Thread(target=run_keep_alive, daemon=True).start()
+    threading.Thread(target=self_ping, daemon=True).start()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
