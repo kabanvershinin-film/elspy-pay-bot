@@ -1,6 +1,5 @@
 import os
 import logging
-import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -12,22 +11,23 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN    = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+KEYS_CHANNEL = int(os.environ.get("KEYS_CHANNEL", "-1003721030654"))
 SBP_PHONE = os.environ.get("SBP_PHONE", "+7XXXXXXXXXX")
 SBP_NAME  = os.environ.get("SBP_NAME", "Евгений В.")
 
 PLANS = {
-    "start":  {"name": "Start",    "rub": 500,   "desc": "~300 фото, ~15 видео, базовые модели",              "emoji": "⚪"},
-    "basic":  {"name": "Basic",    "rub": 1000,  "desc": "~600 фото, ~30 видео, все модели",                  "emoji": "🔵"},
-    "pro":    {"name": "Pro",      "rub": 3000,  "desc": "~1900 фото, ~100 видео, Nano Banana, Veo, Kling",   "emoji": "🟢"},
-    "elite":  {"name": "Elite",    "rub": 5000,  "desc": "~3200 фото, ~400 видео HD, 30+ моделей",            "emoji": "🟣"},
-    "max":    {"name": "Max",      "rub": 7000,  "desc": "~4500 фото, ~800 видео, приоритет моделей",         "emoji": "🟡"},
-    "ultra":  {"name": "Ultra",    "rub": 10000, "desc": "~6500 фото, ~1500 видео, максимум возможностей",    "emoji": "🔴"},
+    "start": {"name": "Start", "rub": 500,   "desc": "~300 фото, ~15 видео, базовые модели",            "emoji": "⚪"},
+    "basic": {"name": "Basic", "rub": 1000,  "desc": "~600 фото, ~30 видео, все модели",                "emoji": "🔵"},
+    "pro":   {"name": "Pro",   "rub": 3000,  "desc": "~1900 фото, ~100 видео, Nano Banana, Veo, Kling", "emoji": "🟢"},
+    "elite": {"name": "Elite", "rub": 5000,  "desc": "~3200 фото, ~400 видео HD, 30+ моделей",          "emoji": "🟣"},
+    "max":   {"name": "Max",   "rub": 7000,  "desc": "~4500 фото, ~800 видео, приоритет моделей",       "emoji": "🟡"},
+    "ultra": {"name": "Ultra", "rub": 10000, "desc": "~6500 фото, ~1500 видео, максимум возможностей",  "emoji": "🔴"},
 }
 
-KEYS_FILE = "/tmp/keys.json"
-PENDING_FILE = "/tmp/pending.json"
+# Временное хранилище ожидающих оплат (в памяти)
+pending_orders = {}
 
 # ─── KEEP-ALIVE ───────────────────────────────────────────
 
@@ -41,36 +41,52 @@ class KeepAlive(BaseHTTPRequestHandler):
 
 def run_keep_alive():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), KeepAlive)
-    logger.info(f"Keep-alive server on port {port}")
-    server.serve_forever()
-
-# ─── KEYS/PENDING ─────────────────────────────────────────
-
-def load_keys():
-    try:
-        with open(KEYS_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {pid: [] for pid in PLANS}
-
-def save_keys(keys):
-    with open(KEYS_FILE, "w") as f:
-        json.dump(keys, f)
-
-def load_pending():
-    try:
-        with open(PENDING_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_pending(pending):
-    with open(PENDING_FILE, "w") as f:
-        json.dump(pending, f)
+    HTTPServer(('0.0.0.0', port), KeepAlive).serve_forever()
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
+
+# ─── TELEGRAM CHANNEL KEYS ────────────────────────────────
+
+async def add_key_to_channel(bot, plan_id: str, key: str) -> int:
+    """Добавляет ключ в канал, возвращает message_id"""
+    msg = await bot.send_message(
+        KEYS_CHANNEL,
+        f"{plan_id}:{key}"
+    )
+    return msg.message_id
+
+async def get_key_from_channel(bot, plan_id: str):
+    """Ищет первый ключ нужного тарифа в канале"""
+    try:
+        # Получаем историю канала
+        messages = await bot.get_chat_history(KEYS_CHANNEL, limit=200)
+        for msg in messages:
+            if msg.text and msg.text.startswith(f"{plan_id}:"):
+                key = msg.text.split(":", 1)[1].strip()
+                return key, msg.message_id
+    except Exception as e:
+        logger.error(f"get_key error: {e}")
+    return None, None
+
+async def count_keys_in_channel(bot, plan_id: str) -> int:
+    """Считает ключи тарифа в канале"""
+    try:
+        count = 0
+        async for msg in bot.get_chat_history(KEYS_CHANNEL, limit=500):
+            if msg.text and msg.text.startswith(f"{plan_id}:"):
+                count += 1
+        return count
+    except Exception as e:
+        logger.error(f"count_keys error: {e}")
+        return 0
+
+async def delete_key_from_channel(bot, message_id: int):
+    """Удаляет ключ из канала"""
+    try:
+        await bot.delete_message(KEYS_CHANNEL, message_id)
+    except Exception as e:
+        logger.error(f"delete_key error: {e}")
 
 # ─── KEYBOARDS ────────────────────────────────────────────
 
@@ -130,74 +146,110 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
+    bot = context.bot
 
     if query.data == "admin_addkeys" and is_admin(uid):
-        await query.message.edit_text("➕ *Добавить ключи*\n\nВыбери тариф:", parse_mode="Markdown", reply_markup=addkeys_keyboard())
+        await query.message.edit_text(
+            "➕ *Добавить ключи*\n\nВыбери тариф:",
+            parse_mode="Markdown",
+            reply_markup=addkeys_keyboard()
+        )
 
     elif query.data == "admin_keys" and is_admin(uid):
-        keys = load_keys()
+        await query.message.edit_text("⏳ Считаю ключи...", parse_mode="Markdown")
         text = "📊 *Остаток ключей:*\n\n"
         for pid, p in PLANS.items():
-            count = len(keys.get(pid, []))
+            count = await count_keys_in_channel(bot, pid)
             emoji = "✅" if count > 0 else "❌"
             text += f"{emoji} *{p['name']}* ({p['rub']}₽): {count} шт\n"
-        await query.message.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]]))
+        await query.message.edit_text(
+            text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]])
+        )
 
     elif query.data == "admin_pending" and is_admin(uid):
-        pending = load_pending()
-        if not pending:
-            await query.message.edit_text("✅ Нет ожидающих оплат", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]]))
+        if not pending_orders:
+            await query.message.edit_text(
+                "✅ Нет ожидающих оплат",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]])
+            )
             return
-        text = f"⏳ *Ожидают подтверждения: {len(pending)}*\n\nПроверь личные сообщения — там кнопки подтверждения."
-        await query.message.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]]))
+        text = f"⏳ *Ожидают подтверждения: {len(pending_orders)}*\n\nПроверь личные сообщения — там кнопки подтверждения."
+        await query.message.edit_text(
+            text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]])
+        )
 
     elif query.data == "admin_delkeys" and is_admin(uid):
-        await query.message.edit_text("🗑 *Очистить ключи*\n\nВыбери тариф:", parse_mode="Markdown", reply_markup=delkeys_keyboard())
+        await query.message.edit_text(
+            "🗑 *Очистить ключи*\n\nВыбери тариф:",
+            parse_mode="Markdown",
+            reply_markup=delkeys_keyboard()
+        )
 
     elif query.data == "admin_back" and is_admin(uid):
-        await query.message.edit_text("👁 *ElSpy Pay* — Панель управления\n\nВыбери действие:", parse_mode="Markdown", reply_markup=admin_keyboard())
+        await query.message.edit_text(
+            "👁 *ElSpy Pay* — Панель управления\n\nВыбери действие:",
+            parse_mode="Markdown",
+            reply_markup=admin_keyboard()
+        )
 
     elif query.data.startswith("addkey_") and is_admin(uid):
         pid = query.data[7:]
         p = PLANS[pid]
         context.user_data["adding_key_plan"] = pid
         await query.message.edit_text(
-            f"➕ *Добавить ключ — {p['name']} ({p['rub']}₽)*\n\nОтправь ключи следующим сообщением.\nМожно несколько — каждый с новой строки:",
+            f"➕ *Добавить ключ — {p['name']} ({p['rub']}₽)*\n\n"
+            f"Отправь ключи следующим сообщением.\n"
+            f"Можно несколько — каждый с новой строки:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="admin_back")]])
         )
 
     elif query.data.startswith("delkey_") and is_admin(uid):
         pid = query.data[7:]
-        keys = load_keys()
-        keys[pid] = []
-        save_keys(keys)
-        await query.message.edit_text(f"✅ Ключи тарифа *{PLANS[pid]['name']}* очищены", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]]))
+        p = PLANS[pid]
+        await query.message.edit_text(f"⏳ Удаляю ключи *{p['name']}*...", parse_mode="Markdown")
+        deleted = 0
+        try:
+            async for msg in bot.get_chat_history(KEYS_CHANNEL, limit=500):
+                if msg.text and msg.text.startswith(f"{pid}:"):
+                    await bot.delete_message(KEYS_CHANNEL, msg.message_id)
+                    deleted += 1
+        except Exception as e:
+            logger.error(f"delkey error: {e}")
+        await query.message.edit_text(
+            f"✅ Удалено *{deleted}* ключей тарифа *{p['name']}*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]])
+        )
 
     elif query.data.startswith("confirm_") and is_admin(uid):
         order_id = query.data[8:]
-        pending = load_pending()
-        if order_id not in pending:
+        if order_id not in pending_orders:
             await query.message.edit_caption("❌ Заявка не найдена (уже обработана?)")
             return
-        order = pending[order_id]
+        order = pending_orders[order_id]
         pid = order["plan"]
         user_id = order["user_id"]
         p = PLANS[pid]
 
-        keys = load_keys()
-        if not keys.get(pid):
+        # Ищем ключ в канале
+        key, msg_id = await get_key_from_channel(bot, pid)
+        if not key:
             await query.message.edit_caption("❌ Ключи закончились! Добавь ключи и подтверди вручную.")
             return
 
-        key = keys[pid].pop(0)
-        save_keys(keys)
-        del pending[order_id]
-        save_pending(pending)
+        # Удаляем ключ из канала
+        await delete_key_from_channel(bot, msg_id)
+        del pending_orders[order_id]
 
-        await query.message.edit_caption(f"✅ Подтверждено! Ключ отправлен пользователю {user_id}", parse_mode="Markdown")
+        await query.message.edit_caption(
+            f"✅ Подтверждено! Ключ отправлен пользователю {user_id}",
+            parse_mode="Markdown"
+        )
 
-        await context.bot.send_message(
+        await bot.send_message(
             user_id,
             f"✅ *Оплата подтверждена!*\n\n"
             f"Тариф: *{p['name']}* ({p['rub']}₽)\n\n"
@@ -216,19 +268,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data.startswith("reject_") and is_admin(uid):
         order_id = query.data[7:]
-        pending = load_pending()
-        if order_id not in pending:
+        if order_id not in pending_orders:
             await query.message.edit_caption("❌ Заявка не найдена")
             return
-        order = pending[order_id]
-        user_id = order["user_id"]
-        del pending[order_id]
-        save_pending(pending)
+        user_id = pending_orders[order_id]["user_id"]
+        del pending_orders[order_id]
 
         await query.message.edit_caption(f"❌ Заявка отклонена. Уведомление отправлено пользователю {user_id}")
-        await context.bot.send_message(
+        await bot.send_message(
             user_id,
-            "❌ *Оплата не подтверждена.*\n\nВозможно скрин нечёткий или сумма не совпадает.\nНапиши в поддержку если есть вопросы.",
+            "❌ *Оплата не подтверждена.*\n\n"
+            "Возможно скрин нечёткий или сумма не совпадает.\n"
+            "Напиши в поддержку если есть вопросы.",
             parse_mode="Markdown"
         )
 
@@ -265,10 +316,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     order_id = f"{uid}_{update.message.message_id}"
 
-    pending = load_pending()
-    pending[order_id] = {"plan": pid, "user_id": uid, "username": user.username or str(uid)}
-    save_pending(pending)
-
+    pending_orders[order_id] = {"plan": pid, "user_id": uid}
     context.user_data.pop("selected_plan", None)
 
     await update.message.reply_text(
@@ -287,7 +335,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_{order_id}"),
-            InlineKeyboardButton("❌ Отклонить",  callback_data=f"reject_{order_id}")
+            InlineKeyboardButton("❌ Отклонить",   callback_data=f"reject_{order_id}")
         ]])
     )
 
@@ -298,11 +346,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pid = context.user_data.pop("adding_key_plan")
         p = PLANS[pid]
         new_keys = [k.strip() for k in update.message.text.strip().splitlines() if k.strip()]
-        keys = load_keys()
-        keys[pid].extend(new_keys)
-        save_keys(keys)
+        added = 0
+        for key in new_keys:
+            await add_key_to_channel(context.bot, pid, key)
+            added += 1
         await update.message.reply_text(
-            f"✅ Добавлено *{len(new_keys)}* ключей для *{p['name']}* ({p['rub']}₽)\nВсего: *{len(keys[pid])}* шт",
+            f"✅ Добавлено *{added}* ключей для *{p['name']}* ({p['rub']}₽)\n\n"
+            f"Ключи сохранены в канале — не потеряются при перезапуске!",
             parse_mode="Markdown",
             reply_markup=admin_keyboard()
         )
