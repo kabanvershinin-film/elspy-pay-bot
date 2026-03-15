@@ -18,10 +18,12 @@ SBP_PHONE = os.environ.get("SBP_PHONE", "+7XXXXXXXXXX")
 SBP_NAME  = os.environ.get("SBP_NAME", "Евгений В.")
 
 PLANS = {
-    "basic":  {"name": "Basic",  "rub": 1000,  "stars": 500,  "desc": "~600 фото, ~30 видео, все модели",               "emoji": "🔵"},
-    "pro":    {"name": "Pro",    "rub": 3000,  "stars": 1500, "desc": "~1900 фото, ~100 видео, Nano Banana, Veo, Kling", "emoji": "🟢"},
-    "elite":  {"name": "Elite",  "rub": 6000,  "stars": 3000, "desc": "~3200 фото 30+ моделей, ~600 видео HD",           "emoji": "🟣"},
-    "max":    {"name": "Max",    "rub": 12000, "stars": 6000, "desc": "~6500 фото, ~1500 видео, приоритет моделей",       "emoji": "🟡"},
+    "start":  {"name": "Start",    "rub": 500,   "desc": "~300 фото, ~15 видео, базовые модели",              "emoji": "⚪"},
+    "basic":  {"name": "Basic",    "rub": 1000,  "desc": "~600 фото, ~30 видео, все модели",                  "emoji": "🔵"},
+    "pro":    {"name": "Pro",      "rub": 3000,  "desc": "~1900 фото, ~100 видео, Nano Banana, Veo, Kling",   "emoji": "🟢"},
+    "elite":  {"name": "Elite",    "rub": 5000,  "desc": "~3200 фото, ~400 видео HD, 30+ моделей",            "emoji": "🟣"},
+    "max":    {"name": "Max",      "rub": 7000,  "desc": "~4500 фото, ~800 видео, приоритет моделей",         "emoji": "🟡"},
+    "ultra":  {"name": "Ultra",    "rub": 10000, "desc": "~6500 фото, ~1500 видео, максимум возможностей",    "emoji": "🔴"},
 }
 
 KEYS_FILE = "/tmp/keys.json"
@@ -50,7 +52,7 @@ def load_keys():
         with open(KEYS_FILE, "r") as f:
             return json.load(f)
     except:
-        return {"basic": [], "pro": [], "elite": [], "max": []}
+        return {pid: [] for pid in PLANS}
 
 def save_keys(keys):
     with open(KEYS_FILE, "w") as f:
@@ -92,14 +94,14 @@ def admin_keyboard():
 def addkeys_keyboard():
     rows = []
     for pid, p in PLANS.items():
-        rows.append([InlineKeyboardButton(f"{p['emoji']} {p['name']}", callback_data=f"addkey_{pid}")])
+        rows.append([InlineKeyboardButton(f"{p['emoji']} {p['name']} — {p['rub']}₽", callback_data=f"addkey_{pid}")])
     rows.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_back")])
     return InlineKeyboardMarkup(rows)
 
 def delkeys_keyboard():
     rows = []
     for pid, p in PLANS.items():
-        rows.append([InlineKeyboardButton(f"🗑 {p['name']}", callback_data=f"delkey_{pid}")])
+        rows.append([InlineKeyboardButton(f"🗑 {p['name']} — {p['rub']}₽", callback_data=f"delkey_{pid}")])
     rows.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_back")])
     return InlineKeyboardMarkup(rows)
 
@@ -138,7 +140,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for pid, p in PLANS.items():
             count = len(keys.get(pid, []))
             emoji = "✅" if count > 0 else "❌"
-            text += f"{emoji} *{p['name']}*: {count} шт\n"
+            text += f"{emoji} *{p['name']}* ({p['rub']}₽): {count} шт\n"
         await query.message.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]]))
 
     elif query.data == "admin_pending" and is_admin(uid):
@@ -157,10 +159,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data.startswith("addkey_") and is_admin(uid):
         pid = query.data[7:]
-        context.user_data["adding_key_plan"] = pid
         p = PLANS[pid]
+        context.user_data["adding_key_plan"] = pid
         await query.message.edit_text(
-            f"➕ *Добавить ключ — {p['name']}*\n\nОтправь ключи следующим сообщением.\nМожно несколько — каждый с новой строки:",
+            f"➕ *Добавить ключ — {p['name']} ({p['rub']}₽)*\n\nОтправь ключи следующим сообщением.\nМожно несколько — каждый с новой строки:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="admin_back")]])
         )
@@ -193,7 +195,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del pending[order_id]
         save_pending(pending)
 
-        await query.message.edit_caption(f"✅ Подтверждено! Ключ `{key}` отправлен пользователю {user_id}", parse_mode="Markdown")
+        await query.message.edit_caption(f"✅ Подтверждено! Ключ отправлен пользователю {user_id}", parse_mode="Markdown")
 
         await context.bot.send_message(
             user_id,
@@ -238,8 +240,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["selected_plan"] = pid
         await query.message.reply_text(
             f"{p['emoji']} *{p['name']}* — {p['rub']}₽\n\n"
+            f"_{p['desc']}_\n\n"
             f"💳 *Оплата через СБП:*\n"
-            f"🏦 Банк: Сбербанк\n"
             f"📱 Номер: `{SBP_PHONE}`\n"
             f"👤 Получатель: {SBP_NAME}\n"
             f"💰 Сумма: *{p['rub']} ₽*\n\n"
@@ -300,7 +302,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keys[pid].extend(new_keys)
         save_keys(keys)
         await update.message.reply_text(
-            f"✅ Добавлено *{len(new_keys)}* ключей для *{p['name']}*\nВсего: *{len(keys[pid])}* шт",
+            f"✅ Добавлено *{len(new_keys)}* ключей для *{p['name']}* ({p['rub']}₽)\nВсего: *{len(keys[pid])}* шт",
             parse_mode="Markdown",
             reply_markup=admin_keyboard()
         )
@@ -312,25 +314,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=plans_keyboard()
     )
 
-async def pin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    if not user or not is_admin(user.id):
-        return
-    msg = await update.message.reply_text(
-        "👁 *ElSpy AI — Пополнение баланса*\n\n"
-        "Оплачивай через СБП и получай ключ активации.\n\n"
-        "🔵 Basic — 1000₽\n"
-        "🟢 Pro — 3000₽\n"
-        "🟣 Elite — 6000₽\n"
-        "🟡 Max — 12000₽\n\n"
-        "💡 Баланс не сгорает!",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("💳 Пополнить баланс", url="https://t.me/elspy_pay_bot?start=pay")
-        ]])
-    )
-    await context.bot.pin_chat_message(chat_id=update.message.chat_id, message_id=msg.message_id)
-
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❓ *Помощь*\n\n/start — главное меню\n/help — помощь\n\nПоддержка: @elspy\\_support",
@@ -338,13 +321,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def main():
-    # Запускаем keep-alive сервер в отдельном потоке
     threading.Thread(target=run_keep_alive, daemon=True).start()
-
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("pin", pin_cmd))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
